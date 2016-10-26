@@ -1,0 +1,65 @@
+#include "ets_sys.h"
+#include "osapi.h"
+#include "eagle_soc.h"
+#include "driver/uart_register.h"
+#include "driver/uart.h"
+
+void (*uart_cb)(char data) = NULL;
+void uart0_rx_intr_handler(void *para)
+{
+  int fifo_len, i;
+  if (UART_FRM_ERR_INT_ST == (READ_PERI_REG(UART_INT_ST(0)) & UART_FRM_ERR_INT_ST)) {
+    WRITE_PERI_REG(UART_INT_CLR(0), UART_FRM_ERR_INT_CLR);
+  } else if (UART_RXFIFO_FULL_INT_ST == (READ_PERI_REG(UART_INT_ST(0)) & UART_RXFIFO_FULL_INT_ST)) {
+    CLEAR_PERI_REG_MASK(UART_INT_ENA(0), UART_RXFIFO_FULL_INT_ENA | UART_RXFIFO_TOUT_INT_ENA);
+    WRITE_PERI_REG(UART_INT_CLR(UART0), UART_RXFIFO_FULL_INT_CLR);
+
+    fifo_len = (READ_PERI_REG(UART_STATUS(UART0)) >> UART_RXFIFO_CNT_S)&UART_RXFIFO_CNT;
+    for (i = 0; i < fifo_len; i++) {
+      if (uart_cb != NULL)
+        uart_cb(READ_PERI_REG(UART_FIFO(0)) & 0xFF);
+    }
+  } else if (UART_RXFIFO_TOUT_INT_ST == (READ_PERI_REG(UART_INT_ST(0)) & UART_RXFIFO_TOUT_INT_ST)) {
+    CLEAR_PERI_REG_MASK(UART_INT_ENA(0), UART_RXFIFO_FULL_INT_ENA | UART_RXFIFO_TOUT_INT_ENA);
+    WRITE_PERI_REG(UART_INT_CLR(UART0), UART_RXFIFO_TOUT_INT_CLR);
+    fifo_len = (READ_PERI_REG(UART_STATUS(UART0)) >> UART_RXFIFO_CNT_S)&UART_RXFIFO_CNT;
+    for (i = 0; i < fifo_len; i++) {
+      if (uart_cb != NULL)
+        uart_cb(READ_PERI_REG(UART_FIFO(0)) & 0xFF);
+    }
+  } else if (UART_TXFIFO_EMPTY_INT_ST == (READ_PERI_REG(UART_INT_ST(0)) & UART_TXFIFO_EMPTY_INT_ST)) {
+    CLEAR_PERI_REG_MASK(UART_INT_ENA(UART0), UART_TXFIFO_EMPTY_INT_ENA);
+    WRITE_PERI_REG(UART_INT_CLR(0), UART_TXFIFO_EMPTY_INT_CLR);
+  } else if (UART_RXFIFO_OVF_INT_ST  == (READ_PERI_REG(UART_INT_ST(0)) & UART_RXFIFO_OVF_INT_ST)) {
+    WRITE_PERI_REG(UART_INT_CLR(0), UART_RXFIFO_OVF_INT_CLR);
+  }
+  SET_PERI_REG_MASK(UART_INT_ENA(0), UART_RXFIFO_FULL_INT_ENA | UART_RXFIFO_TOUT_INT_ENA);
+}
+void uart_setup(void (*uart_callback)(char data))
+{
+  ETS_UART_INTR_ATTACH(uart0_rx_intr_handler,  NULL);
+  PIN_PULLUP_DIS(PERIPHS_IO_MUX_U0TXD_U);
+  PIN_FUNC_SELECT(PERIPHS_IO_MUX_U0TXD_U, FUNC_U0TXD);
+  uart_div_modify(0, UART_CLK_FREQ / 115200);
+  WRITE_PERI_REG(UART_CONF0(0), ((0x00 & UART_PARITY_EN_M)  <<  UART_PARITY_EN_S) //DISABLE PARITY
+                 | ((0x02 & UART_PARITY_M)  << UART_PARITY_S ) // PARITY NONE
+                 | ((0x01 & UART_STOP_BIT_NUM) << UART_STOP_BIT_NUM_S) // 1 STOP BIT
+                 | ((0x03 & UART_BIT_NUM) << UART_BIT_NUM_S));  // 8 BIT DATA
+  //clear rx and tx fifo,not ready
+  SET_PERI_REG_MASK(UART_CONF0(0), UART_RXFIFO_RST | UART_TXFIFO_RST);    //RESET FIFO
+  CLEAR_PERI_REG_MASK(UART_CONF0(0), UART_RXFIFO_RST | UART_TXFIFO_RST);
+  //set rx fifo trigger
+  WRITE_PERI_REG(UART_CONF1(0),
+                 ((127 & UART_RXFIFO_FULL_THRHD) << UART_RXFIFO_FULL_THRHD_S) | //max 0~127
+                 (0x02 & UART_RX_TOUT_THRHD) << UART_RX_TOUT_THRHD_S |  //max 0~127
+                 UART_RX_TOUT_EN |
+                 ((0x10 & UART_TXFIFO_EMPTY_THRHD) << UART_TXFIFO_EMPTY_THRHD_S)); //wjl
+  //clear all interrupt
+  WRITE_PERI_REG(UART_INT_CLR(0), 0xffff);
+  //enable rx_interrupt
+  SET_PERI_REG_MASK(UART_INT_ENA(0), UART_RXFIFO_TOUT_INT_ENA | UART_FRM_ERR_INT_ENA);
+  SET_PERI_REG_MASK(UART_INT_ENA(0), UART_RXFIFO_FULL_INT_ENA | UART_RXFIFO_OVF_INT_ENA);
+
+  uart_cb = uart_callback;
+  ETS_UART_INTR_ENABLE();
+}

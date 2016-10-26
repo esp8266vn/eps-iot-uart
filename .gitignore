@@ -1,0 +1,9 @@
+.DS_Store
+build/
+firmware
+.output
+map.txt
+*.out
+*.bin
+*.o
+*.a
